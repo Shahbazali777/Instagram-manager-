@@ -1,96 +1,127 @@
 import os
 import time
 from instagrapi import Client
+from instagrapi.exceptions import LoginRequired
 
-def load_credentials():
-    print("--- Instagram Welcome Bot Setup ---")
-    # Script start hote hi sabse pehle username aur password mangegi
-    username = input("Enter your Instagram Username: ").strip()
-    password = input("Enter your Instagram Password: ").strip()
-    return username, password
+# ⚙️ CONFIGURATION
+USERNAME = "YOUR_INSTAGRAM_USERNAME"
+PASSWORD = "YOUR_INSTAGRAM_PASSWORD"
+SESSION_FILE = "instagram_session.json"
 
-def send_self_dm(cl, username, message):
-    """Apne hi account (Self DM) me confirmation message bhejne ke liye"""
+cl = Client()
+
+def login_and_connect():
+    print("📡 Initializing Instagram Connection Module...")
+    if os.path.exists(SESSION_FILE):
+        try:
+            print("🔄 Loading existing session...")
+            cl.load_settings(SESSION_FILE)
+            cl.login(USERNAME, PASSWORD)
+            print("✅ Connected successfully via saved session!")
+            return True
+        except Exception as e:
+            print("⚠️ Session expired. Attempting fresh login...")
+            
     try:
-        self_id = cl.user_id_from_username(username)
-        cl.direct_send(message, user_ids=[self_id])
-        print(f"[✔] Notification sent to self DM: {message}")
+        print(f"🔐 Logging in as {USERNAME}...")
+        cl.login(USERNAME, PASSWORD)
+        cl.dump_settings(SESSION_FILE)
+        print("✅ Fresh login successful! Session saved.")
+        return True
     except Exception as e:
-        print(f"[-] Could not send self DM: {e}")
+        print(f"❌ Login Failed: {e}")
+        return False
 
-def main():
-    # Credentials input lena
-    username, password = load_credentials()
-    cl = Client()
-    
-    # Session file taake baar baar login credentials send na karne paren (Safety feature)
-    session_file = f"{username}_session.json"
-    
-    processed_followers = set()
-    user_id = None
-    is_first_run = True
+def send_self_success_msg():
+    try:
+        my_id = cl.user_id_from_username(USERNAME)
+        success_text = (
+            "🎉 *Bot Connect Success!*\n\n"
+            "Aapka Instagram bot active ho chuka hai.\n\n"
+            "💡 Commands dekhne ke liye DM mein *.allcmd* likhein."
+        )
+        cl.direct_send(success_text, user_ids=[my_id])
+        print("📨 Success notification sent to your DM!")
+    except Exception as e:
+        print(f"⚠️ Could not send self-message: {e}")
 
-    print("\n[★] Bot Started. Monitoring connection 24/7...")
+def listen_messages():
+    print("🤖 Bot is now listening to DMs & Groups... (Press Ctrl+C to stop)")
+    seen_message_ids = set()
 
-    # Infinite Loop: Jo script ko kabhi band nahi hone degi (24 Hours Active)
     while True:
         try:
-            # 1. Reconnect & Login Check
-            if not cl.get_settings() or not user_id:
-                print("\n[..] Connecting/Reconnecting to Instagram...")
-                
-                # Agar pehle se session save hai to us se login karega
-                if os.path.exists(session_file):
-                    try:
-                        cl.load_settings(session_file)
-                        cl.login(username, password)
-                    except:
-                        cl.login(username, password)
-                        cl.dump_settings(session_file)
-                else:
-                    cl.login(username, password)
-                    cl.dump_settings(session_file)
-                
-                user_id = cl.user_id_from_username(username)
-                print("[+] Connection Successful!")
-                
-                # Connection active hote hi aapko apne inbox me msg aayega
-                send_self_dm(cl, username, "🤖 [Bot Active OK] Connection restored and bot is working smoothly!")
-
-                # Pehli baar run hone par mojooda followers ko safe list me dalna
-                if is_first_run:
-                    print("Fetching current followers list...")
-                    try:
-                        processed_followers = set(cl.user_followers(user_id).keys())
-                        is_first_run = False
-                        print(f"[+] Loaded {len(processed_followers)} existing followers. Monitoring for new ones...")
-                    except Exception as e:
-                        print(f"Error fetching followers: {e}")
-
-            # 2. Automatically Welcome New Members
-            print("Checking for new followers...")
-            current_followers = set(cl.user_followers(user_id).keys())
-            new_followers = current_followers - processed_followers
-
-            for follower_id in new_followers:
-                # Welcome Message text
-                WELCOME_MESSAGE = "Assalam-o-Alaikum! Welcome to our page. Thank you for following us! 😊"
-                
-                cl.direct_send(WELCOME_MESSAGE, user_ids=[follower_id])
-                print(f"[+] Welcome message sent to follower ID: {follower_id}")
-                processed_followers.add(follower_id)
-                time.sleep(5) # Rate limit / Anti-ban safety gap
-
-            # Har 5 minute (300 seconds) baad dobara check karega
-            time.sleep(300)
-
-        except Exception as e:
-            # Agar internet down ho ya Instagram temporary logout kare to script crash nahi hogi
-            print(f"\n[⚠️] Connection Lost or Error: {e}")
-            print("[🔄] Retrying automatically in 1 minute... Please don't close.")
+            threads = cl.direct_threads(amount=10)
             
-            user_id = None 
-            time.sleep(60) # 1 minute wait karne ke baad loop dobara check karegi
+            for thread in threads:
+                messages = thread.messages
+                if not messages:
+                    continue
+                    
+                last_msg = messages[0]
+                
+                # 👥 FEATURE: WELCOME NEW MEMBER IN GROUP CHAT
+                # Agar group chat mein koi naya member join karta hai ya add hota hai
+                if thread.is_group and last_msg.item_type == 'action_log':
+                    if last_msg.id not in seen_message_ids:
+                        seen_message_ids.add(last_msg.id)
+                        
+                        # Action log check karna ke kya koi add hua hai
+                        action_text = getattr(last_msg, 'text', '')
+                        if "added" in action_text.lower() or "joined" in action_text.lower():
+                            welcome_msg = (
+                                "👋 *Welcome to the Group!*\n\n"
+                                "Gup-shup mein khushamdeed! Umeed hai aapka waqt accha guzrega.\n"
+                                "💡 Is bot ki commands dekhne ke liye chat mein *.allcmd* likhein."
+                            )
+                            cl.direct_send(welcome_msg, thread_id=thread.id)
+                            print(f"✨ Group mein naye member ko welcome kar diya: Thread {thread.id}")
+                            continue
+
+                # Normal messages handling
+                if last_msg.user_id == cl.user_id or last_msg.id in seen_message_ids:
+                    continue
+                    
+                seen_message_ids.add(last_msg.id)
+                body = last_msg.text.lower().strip() if last_msg.text else ""
+                thread_id = thread.id
+
+                # 📜 .allcmd COMMAND
+                if body == ".allcmd":
+                    cmd_list = (
+                        "╔════════════════════════╗\n"
+                        "║      ⚙️ BOT COMMANDS LIST ⚙️     ║\n"
+                        "╚════════════════════════╝\n\n"
+                        "📌 1.  .ping\n"
+                        "◽ Work: Bot ka active status check karta hai.\n"
+                        "◽ Response: Pong!\n\n"
+                        "📌 2.  .allcmd\n"
+                        "◽ Work: Bot ki tamam available commands ki list detail ke sath show karta hai.\n\n"
+                        "📌 3.  Auto Welcome\n"
+                        "◽ Work: Group chat mein naye aane wale member ko automatic welcome message bhejta hai.\n\n"
+                        "─────────────────────────\n"
+                        "🤖 Termux Automated Instagram Bot v1.1"
+                    )
+                    cl.direct_send(cmd_list, thread_id=thread_id)
+
+                # 👋 .ping COMMAND
+                elif body == ".ping":
+                    cl.direct_send("🏓 Pong! Instagram bot completely active hai.", thread_id=thread_id)
+
+            time.sleep(5)
+
+        except LoginRequired:
+            print("📡 Connection lost. Re-authenticating...")
+            if not login_and_connect():
+                time.sleep(10)
+        except Exception as e:
+            print(f"⚠️ Error in loop: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    main()
+    if USERNAME == "YOUR_INSTAGRAM_USERNAME":
+        print("❌ Error: Pehle code ke top par apna Instagram Username aur Password likhein!")
+    else:
+        if login_and_connect():
+            send_self_success_msg()
+            listen_messages()
